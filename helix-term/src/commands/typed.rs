@@ -349,7 +349,8 @@ fn write_impl(
     let (view, doc) = current!(cx.editor);
 
     if doc.trim_trailing_whitespace() {
-        trim_trailing_whitespace(doc, view.id);
+        let loader = cx.editor.syn_loader.load();
+        trim_trailing_whitespace(doc, view.id, &loader);
     }
     if config.trim_final_newlines {
         trim_final_newlines(doc, view.id);
@@ -387,7 +388,11 @@ fn write_impl(
 }
 
 /// Trim all whitespace preceding line-endings in a document.
-fn trim_trailing_whitespace(doc: &mut Document, view_id: ViewId) {
+fn trim_trailing_whitespace(
+    doc: &mut Document,
+    view_id: ViewId,
+    loader: &helix_core::syntax::Loader,
+) {
     let text = doc.text();
     let mut pos = 0;
     let transaction = Transaction::delete(
@@ -405,7 +410,26 @@ fn trim_trailing_whitespace(doc: &mut Document, view_id: ViewId) {
             // is no line-ending on this line:
             let line_end = pos - line_end_len_chars;
             if first_trailing_whitespace != line_end {
-                Some((first_trailing_whitespace, line_end))
+                let mut txn = Some((first_trailing_whitespace, line_end));
+                if let Some(syn) = doc.syntax() {
+                    let layer =
+                        syn.layer_for_byte_range(first_trailing_whitespace as u32, line_end as u32);
+                    let layer_data = syn.layer(layer);
+                    let language = layer_data.language;
+                    let language_data = loader.language(language);
+                    if language_data.config().language_id.starts_with("markdown")
+                        && (line_end - first_trailing_whitespace) >= 2
+                    {
+                        // markdown has syntax which is "two spaces at end of line"
+                        let last_two = line_end - 2;
+                        if last_two == first_trailing_whitespace {
+                            txn = None;
+                        } else {
+                            txn = Some((first_trailing_whitespace, last_two));
+                        }
+                    }
+                }
+                txn
             } else {
                 None
             }
@@ -810,7 +834,8 @@ pub fn write_all_impl(
         let view = view_mut!(cx.editor, target_view);
 
         if doc.trim_trailing_whitespace() {
-            trim_trailing_whitespace(doc, target_view);
+            let loader = cx.editor.syn_loader.load();
+            trim_trailing_whitespace(doc, target_view, &loader);
         }
         if config.trim_final_newlines {
             trim_final_newlines(doc, target_view);
